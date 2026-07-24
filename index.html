@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AI Search Readiness Grader — will an LLM cite your page?</title>
+<meta name="description" content="Paste a URL and score how ready it is to be found and cited by AI search engines (AEO/GEO). Claude fetches and classifies each signal; the score is deterministic in JavaScript." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    --ink: #16181d;
+    --muted: #5b616b;
+    --faint: #8b9099;
+    --paper: #f2f3ef;
+    --panel: #ffffff;
+    --line: #e2e4de;
+    --line-strong: #cfd2ca;
+    --accent: #3d34d0;
+    --accent-deep: #2a2299;
+    --accent-tint: #ecebfb;
+    --accent-tint-2: #dcd9f7;
+    --good: #1f8a5b;
+    --good-tint: #e5f2ec;
+    --warn: #b8791f;
+    --warn-tint: #f4f0e6;
+    --bad: #c0392b;
+    --bad-tint: #f7e9e7;
+    --radius: 10px;
+    --shadow: 0 1px 2px rgba(20,24,29,.04), 0 8px 24px rgba(20,24,29,.05);
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Inter", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 28px 22px 80px; }
+
+  .eyebrow {
+    font-family: "IBM Plex Mono", monospace;
+    font-size: 11px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--faint);
+    margin: 0;
+  }
+
+  header.masthead {
+    display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between;
+    gap: 18px; padding-bottom: 20px; border-bottom: 1px solid var(--line-strong);
+  }
+  .masthead h1 {
+    font-family: "Archivo", sans-serif; font-weight: 700;
+    font-size: clamp(24px, 3.4vw, 34px); letter-spacing: -0.02em; margin: 6px 0 6px; line-height: 1.02;
+  }
+  .masthead p.lede { margin: 0; max-width: 56ch; color: var(--muted); font-size: 14px; }
+
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    box-shadow: var(--shadow); padding: 20px 20px 22px; margin-top: 22px;
+  }
+  .panel > .eyebrow { margin-bottom: 14px; display: flex; align-items: center; gap: 8px; }
+  .panel > .eyebrow::before {
+    content: ""; width: 7px; height: 7px; border-radius: 2px; background: var(--accent); display: inline-block;
+  }
+
+  /* input row */
+  .grade-inputs { display: grid; grid-template-columns: 1.6fr 1fr auto; gap: 10px; align-items: center; }
+  @media (max-width: 640px) { .grade-inputs { grid-template-columns: 1fr; } }
+  .grade-inputs input {
+    font-family: "Inter", sans-serif; font-size: 14px; color: var(--ink);
+    background: #fbfbfa; border: 1px solid var(--line-strong); border-radius: 8px; padding: 11px 12px; width: 100%;
+  }
+  .grade-inputs input:focus-visible { outline: none; border-color: var(--accent); }
+  button.primary {
+    font-family: "Archivo", sans-serif; font-weight: 600; font-size: 14px;
+    background: var(--accent); color: #fff; border: 1px solid var(--accent);
+    border-radius: 8px; padding: 11px 18px; cursor: pointer; white-space: nowrap;
+    transition: background .15s, transform .05s;
+  }
+  button.primary:hover { background: var(--accent-deep); }
+  button.primary:active { transform: translateY(1px); }
+  button.primary:disabled { opacity: .55; cursor: default; }
+  .grade-blurb { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); max-width: 74ch; }
+  .status { margin-top: 12px; font-size: 13px; min-height: 18px; color: var(--muted); }
+  .status.err { color: var(--bad); }
+  .status .spinner {
+    display: inline-block; width: 13px; height: 13px; border: 2px solid var(--accent-tint-2);
+    border-top-color: var(--accent); border-radius: 50%; vertical-align: -2px; margin-right: 7px;
+    animation: spin .7s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* score header */
+  .result-head { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .score-ring { position: relative; width: 118px; height: 118px; flex: none; }
+  .score-ring svg { transform: rotate(-90deg); }
+  .score-ring .score-num {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 32px;
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  }
+  .grade-chip {
+    display: inline-flex; align-items: center; gap: 8px; font-family: "Archivo", sans-serif;
+    font-weight: 600; font-size: 15px; padding: 8px 14px; border-radius: 999px; border: 1px solid transparent; white-space: nowrap;
+  }
+  .grade-chip .dot { width: 9px; height: 9px; border-radius: 50%; }
+  .verdict { margin: 0; font-size: 14px; color: var(--muted); max-width: 54ch; }
+  .result-target { font-family: "IBM Plex Mono", monospace; font-size: 12px; color: var(--faint); word-break: break-all; margin: 2px 0 0; }
+
+  /* criteria */
+  .crit { margin-top: 8px; }
+  .crit-row { padding: 13px 0; border-bottom: 1px dashed var(--line); }
+  .crit-row:last-child { border-bottom: none; }
+  .crit-top { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  .crit-name { font-weight: 600; font-size: 14px; }
+  .crit-name .wt { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; color: var(--faint); font-weight: 500; margin-left: 8px; letter-spacing: .04em; }
+  .badge {
+    font-family: "IBM Plex Mono", monospace; font-size: 10px; letter-spacing: .07em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px; white-space: nowrap; font-weight: 600;
+  }
+  .badge.pass { background: var(--good-tint); color: var(--good); }
+  .badge.partial { background: var(--warn-tint); color: var(--warn); }
+  .badge.fail { background: var(--bad-tint); color: var(--bad); }
+  .crit-why { color: var(--muted); font-size: 13px; margin-top: 5px; }
+  .crit-fix { font-size: 13px; margin-top: 5px; color: var(--ink); }
+  .crit-fix b { font-family: "IBM Plex Mono", monospace; font-size: 10.5px; letter-spacing: .05em; text-transform: uppercase; color: var(--accent-deep); font-weight: 600; }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; }
+  button.ghost {
+    font-family: "IBM Plex Mono", monospace; font-size: 11.5px; letter-spacing: .04em; text-transform: uppercase;
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 7px;
+    padding: 8px 12px; cursor: pointer; transition: border-color .15s, color .15s, transform .05s;
+  }
+  button.ghost:hover { border-color: var(--accent); color: var(--accent-deep); }
+  button.ghost:active { transform: translateY(1px); }
+
+  /* api settings */
+  details.api-settings { }
+  .apibar summary { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; cursor: pointer; list-style: none; }
+  .apibar summary::-webkit-details-marker { display: none; }
+  .apibar .api-sum { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 15px; color: var(--ink); }
+  .apibar .api-sub { font-family: "Inter", sans-serif; font-size: 12.5px; color: var(--faint); }
+  .api-grid { margin-top: 14px; display: grid; gap: 14px; max-width: 560px; }
+  .api-grid label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 5px; }
+  .api-grid input[type=password], .api-grid input[type=text] {
+    width: 100%; font-family: "IBM Plex Mono", monospace; font-size: 13px; color: var(--ink);
+    background: #fbfbfa; border: 1px solid var(--line-strong); border-radius: 8px; padding: 10px 12px;
+  }
+  .api-grid input:focus-visible { outline: none; border-color: var(--accent); }
+  .api-note { font-size: 12px; color: var(--faint); line-height: 1.6; margin: 0; }
+  .api-note code { font-family: "IBM Plex Mono", monospace; font-size: 11px; background: #e9ebe5; padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+
+  /* help */
+  .config-section { margin-top: 22px; }
+  details.config {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); overflow: hidden;
+  }
+  details.config > summary {
+    list-style: none; cursor: pointer; padding: 16px 20px; display: flex; align-items: center; justify-content: space-between; gap: 12px; user-select: none;
+  }
+  details.config > summary::-webkit-details-marker { display: none; }
+  summary .s-title { font-family: "Archivo", sans-serif; font-weight: 600; font-size: 15px; }
+  summary .s-hint { font-size: 12.5px; color: var(--faint); }
+  summary .chev { font-family: "IBM Plex Mono", monospace; color: var(--faint); transition: transform .2s; }
+  details.config[open] summary .chev { transform: rotate(90deg); }
+  .config-body { padding: 4px 20px 22px; border-top: 1px solid var(--line); }
+  .cfg-block { margin-top: 18px; }
+  .cfg-block > .eyebrow { margin-bottom: 6px; }
+  .help-list { margin: 6px 0 0; padding-left: 18px; }
+  .help-list li { margin-bottom: 8px; font-size: 13.5px; color: var(--muted); line-height: 1.55; }
+  .help-list li b { color: var(--ink); font-weight: 600; }
+  .help-list code { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; background: #e9ebe5; padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+
+  footer.note {
+    margin-top: 30px; font-size: 12.5px; color: var(--faint); line-height: 1.6;
+    border-top: 1px solid var(--line); padding-top: 16px; max-width: 74ch;
+  }
+  footer.note code { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; background: #e9ebe5; padding: 1px 5px; border-radius: 4px; color: var(--ink); }
+  footer.note a { color: var(--accent-deep); }
+
+  .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  @media (prefers-reduced-motion: reduce) { .score-ring svg circle { transition: none !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="masthead">
+    <div>
+      <p class="eyebrow">AI Search Readiness Grader</p>
+      <h1>Will an LLM cite your page?</h1>
+      <p class="lede">Paste a URL and get a readiness score for AI search (AEO/GEO): the structural signals that decide whether ChatGPT, Perplexity, Claude, and Google's AI answers can find, parse, and quote you. Claude does the research; the score is plain arithmetic you can read.</p>
+    </div>
+  </header>
+
+  <section class="panel apibar" aria-labelledby="api-h">
+    <details class="api-settings" id="api-settings">
+      <summary><span class="api-sum" id="api-h">Connect Claude</span> <span class="api-sub" id="api-state">API key needed to grade a page</span></summary>
+      <div class="api-grid">
+        <div>
+          <label for="api-key">Anthropic API key (used from this browser only)</label>
+          <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off" />
+        </div>
+        <div>
+          <label for="api-model">Model</label>
+          <input type="text" id="api-model" value="claude-sonnet-5" />
+        </div>
+        <p class="api-note">Your key is used only for direct calls from your browser to <code>api.anthropic.com</code>. It is not stored or sent anywhere else. Grading uses the API's web search tool (which must be enabled on your account) so Claude can fetch the live page. Never commit a key into the repo. For a public production tool, route calls through your own backend instead.</p>
+      </div>
+    </details>
+  </section>
+
+  <section class="panel" aria-labelledby="grade-h">
+    <p class="eyebrow" id="grade-h">Grade a page</p>
+    <p class="grade-blurb">Enter the URL you want AI search engines to cite. Optionally add the question or query you want to rank for, so the grade is judged against real intent.</p>
+    <div class="grade-inputs">
+      <input id="url-input" placeholder="https://yourdocs.com/guide" autocomplete="off" />
+      <input id="query-input" placeholder="target query (optional)" autocomplete="off" />
+      <button class="primary" id="btn-grade">Grade page</button>
+    </div>
+    <div class="status" id="status"></div>
+  </section>
+
+  <section class="panel" id="result-panel" aria-live="polite" hidden>
+    <p class="eyebrow">Readiness score</p>
+    <div class="result-head">
+      <div class="score-ring">
+        <svg width="118" height="118" viewBox="0 0 118 118">
+          <circle cx="59" cy="59" r="52" fill="none" stroke="#eef0ea" stroke-width="12" />
+          <circle id="ring-fill" cx="59" cy="59" r="52" fill="none" stroke="var(--accent)" stroke-width="12"
+            stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"
+            style="transition: stroke-dashoffset .6s cubic-bezier(.22,.61,.36,1), stroke .3s;" />
+        </svg>
+        <div class="score-num" id="score-num">0</div>
+      </div>
+      <div>
+        <span class="grade-chip" id="grade-chip"><span class="dot"></span><span id="grade-label">—</span></span>
+        <p class="result-target" id="result-target"></p>
+        <p class="verdict" id="verdict"></p>
+      </div>
+    </div>
+    <div class="crit" id="crit"></div>
+    <div class="toolbar">
+      <button class="ghost" id="btn-copy">Copy report</button>
+      <button class="ghost" id="btn-export">Export Markdown</button>
+    </div>
+  </section>
+
+  <div class="config-section">
+    <details class="config" id="help">
+      <summary>
+        <span>
+          <span class="s-title">How this works &amp; what it checks</span>
+          &nbsp; <span class="s-hint">method · signals · scoring</span>
+        </span>
+        <span class="chev">▸</span>
+      </summary>
+      <div class="config-body">
+        <div class="cfg-block">
+          <p class="eyebrow">The method</p>
+          <ul class="help-list">
+            <li>Claude fetches your live page with its web search tool and judges each signal below as <b>pass</b>, <b>partial</b>, or <b>fail</b>, with one line of evidence and one concrete fix.</li>
+            <li>Claude only classifies. The JavaScript maps pass/partial/fail to points, applies each signal's weight, and sums to a 0&ndash;100 score, so the number is deterministic and traceable to the checks.</li>
+            <li>It runs from a static page with no backend, so Claude does the fetching (a browser can't fetch arbitrary URLs). Web search must be enabled on your Anthropic account.</li>
+          </ul>
+        </div>
+        <div class="cfg-block">
+          <p class="eyebrow">What it checks</p>
+          <ul class="help-list" id="criteria-help"></ul>
+        </div>
+        <div class="cfg-block">
+          <p class="eyebrow">Scoring</p>
+          <ul class="help-list">
+            <li><code>pass</code> = full points, <code>partial</code> = half, <code>fail</code> = zero, each times the signal's weight.</li>
+            <li>Bands: <b>80&ndash;100 AI-ready</b>, <b>55&ndash;79 needs work</b>, <b>0&ndash;54 largely invisible</b> to AI search.</li>
+          </ul>
+        </div>
+      </div>
+    </details>
+  </div>
+
+  <footer class="note">
+    A readiness heuristic, not a guarantee of citation: AI engines are opaque and change often. It grades the structural fundamentals that reliably help. Web search grounds Claude on your live page; results can still vary between runs. Built as a single HTML file, bring-your-own-key. <a href="https://github.com/cpl-marketing/ai-readiness-grader">Source on GitHub</a>. MIT.
+  </footer>
+</div>
+
+<script>
+"use strict";
+
+/* ---- The rubric: signals that decide AI-search citability ---- */
+const CRITERIA = [
+  { key: "answer_first", name: "Answer-first structure", weight: 3,
+    desc: "The page states a direct, quotable answer near the top, before background. LLMs lift self-contained answers." },
+  { key: "headings", name: "Clear heading hierarchy", weight: 2,
+    desc: "One H1 and descriptive, question-shaped H2/H3s that map to how people ask. Helps retrieval chunk the page." },
+  { key: "chunkable", name: "Self-contained sections", weight: 3,
+    desc: "Each section makes sense on its own without the rest of the page, so a retrieved snippet stands alone." },
+  { key: "schema", name: "Structured data (schema.org)", weight: 2,
+    desc: "JSON-LD such as Article, FAQPage, HowTo, or Product that tells machines what the page is." },
+  { key: "scannable", name: "Scannable formatting", weight: 2,
+    desc: "Lists, tables, and short paragraphs instead of walls of text. Extractable facts beat prose." },
+  { key: "examples", name: "Concrete examples / code", weight: 2,
+    desc: "Worked examples, numbers, or code blocks. Specifics get quoted; generic claims do not." },
+  { key: "freshness", name: "Freshness signals", weight: 2,
+    desc: "A visible published or updated date and current facts. Models favor content that looks maintained." },
+  { key: "authority", name: "Citations & authority", weight: 2,
+    desc: "Named author or source, outbound citations, and specific claims that signal trustworthiness." },
+  { key: "meta", name: "Title & meta clarity", weight: 1,
+    desc: "A descriptive <title> and meta description that match the page's actual answer and intent." },
+  { key: "llms_txt", name: "llms.txt present", weight: 1,
+    desc: "An /llms.txt file guiding AI crawlers to your key content. Emerging, low-cost, still a positive signal." },
+  { key: "crawlable", name: "Crawlable to AI bots", weight: 2,
+    desc: "Content in HTML (not JS-only), and robots rules that don't block AI user-agents like GPTBot or ClaudeBot." },
+];
+const STATUS_POINTS = { pass: 1, partial: 0.5, fail: 0 };
+const el = (id) => document.getElementById(id);
+const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+/* ---- populate the help rubric ---- */
+(function renderCriteriaHelp() {
+  const host = el("criteria-help");
+  CRITERIA.forEach((c) => {
+    const li = document.createElement("li");
+    li.innerHTML = "<b>" + escapeHtml(c.name) + "</b> <code>weight " + c.weight + "</code> &mdash; " + escapeHtml(c.desc);
+    host.appendChild(li);
+  });
+})();
+
+const maxWeighted = CRITERIA.reduce((s, c) => s + c.weight, 0);
+
+function gradeBand(score) {
+  if (score >= 80) return { label: "AI-ready", color: { bg: "#e5f2ec", fg: "#1f6f49", dot: "#1f8a5b" }, stroke: "var(--good)",
+    verdict: "Strong structural fundamentals. An LLM can find a clean, quotable answer here." };
+  if (score >= 55) return { label: "Needs work", color: { bg: "#f4f0e6", fg: "#8a6a1f", dot: "#b8791f" }, stroke: "var(--warn)",
+    verdict: "Parts are citable, but gaps below make it easy for AI answers to skip you. Fix the fails first." };
+  return { label: "Largely invisible", color: { bg: "#f7e9e7", fg: "#a5342a", dot: "#c0392b" }, stroke: "var(--bad)",
+    verdict: "AI search will struggle to extract a reliable answer from this page. Rework the structure before anything else." };
+}
+
+/* ---- deterministic scoring ---- */
+function scoreFrom(results) {
+  let earned = 0;
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  const rows = CRITERIA.map((c) => {
+    const r = (results || []).find((x) => norm(x.key) === norm(c.key)) || {};
+    let status = norm(r.status);
+    if (!STATUS_POINTS.hasOwnProperty(status)) status = "fail";
+    earned += STATUS_POINTS[status] * c.weight;
+    return {
+      key: c.key, name: c.name, weight: c.weight, status,
+      why: r.evidence || r.why || "", fix: r.fix || "",
+      flagged: !r.status || !STATUS_POINTS.hasOwnProperty(norm(r.status)),
+    };
+  });
+  const score = Math.round((earned / maxWeighted) * 100);
+  return { score, rows };
+}
+
+/* ---- render ---- */
+function renderResult(target, scored) {
+  el("result-panel").hidden = false;
+  const band = gradeBand(scored.score);
+
+  // ring
+  const circ = 2 * Math.PI * 52;
+  const ring = el("ring-fill");
+  ring.style.stroke = band.stroke;
+  const offset = circ * (1 - scored.score / 100);
+  if (reduceMotion) ring.style.transition = "none";
+  requestAnimationFrame(() => { ring.style.strokeDashoffset = String(offset); });
+
+  // number
+  animateNumber(scored.score);
+
+  // chip + verdict
+  const chip = el("grade-chip");
+  chip.style.background = band.color.bg; chip.style.color = band.color.fg;
+  chip.querySelector(".dot").style.background = band.color.dot;
+  el("grade-label").textContent = band.label;
+  el("result-target").textContent = target;
+  el("verdict").textContent = band.verdict;
+
+  // criteria
+  const host = el("crit");
+  host.innerHTML = "";
+  scored.rows.forEach((r) => {
+    const row = document.createElement("div");
+    row.className = "crit-row";
+    row.innerHTML =
+      '<div class="crit-top">' +
+        '<span class="crit-name">' + escapeHtml(r.name) + '<span class="wt">weight ' + r.weight + '</span></span>' +
+        '<span class="badge ' + r.status + '">' + r.status + '</span>' +
+      '</div>' +
+      (r.why ? '<div class="crit-why">' + escapeHtml(r.why) + '</div>' : "") +
+      (r.status !== "pass" && r.fix ? '<div class="crit-fix"><b>Fix</b> &nbsp;' + escapeHtml(r.fix) + '</div>' : "");
+    host.appendChild(row);
+  });
+}
+
+let animRAF = null;
+function animateNumber(target) {
+  const node = el("score-num");
+  if (reduceMotion) { node.textContent = String(target); return; }
+  const start = 0, t0 = performance.now(), dur = 550;
+  cancelAnimationFrame(animRAF);
+  function step(now) {
+    const p = Math.min(1, (now - t0) / dur);
+    const eased = 1 - Math.pow(1 - p, 3);
+    node.textContent = String(Math.round(start + (target - start) * eased));
+    if (p < 1) animRAF = requestAnimationFrame(step); else node.textContent = String(target);
+  }
+  animRAF = requestAnimationFrame(step);
+}
+
+/* ---- prompt + API ---- */
+function buildPrompt(url, query) {
+  const list = CRITERIA.map((c) => '- ' + c.key + ' (' + c.name + '): ' + c.desc).join("\n");
+  return [
+    "You are an AI-search (AEO/GEO) auditor. Fetch and read the page at the URL below using web search, then judge how ready it is to be found and cited by AI answer engines (ChatGPT, Perplexity, Google AI Overviews, Claude).",
+    "",
+    "URL: " + url,
+    (query ? "Target query the page should answer: " + query : "No specific target query given; judge against the page's own apparent intent."),
+    "",
+    "Judge EACH criterion below as exactly one of: pass, partial, fail. Base it on what you actually observe on the page.",
+    "",
+    "CRITERIA:",
+    list,
+    "",
+    "Return ONLY a JSON object, no prose and no markdown fences, in exactly this shape:",
+    '{ "results": [ { "key": "<criterion key>", "status": "pass|partial|fail", "evidence": "<one short sentence citing what you saw>", "fix": "<one concrete sentence; for a pass, say what is already good>" } ] }',
+    "",
+    "Include every criterion key exactly once. Keep evidence and fix to one sentence each.",
+  ].join("\n");
+}
+
+async function callClaude(prompt) {
+  const key = el("api-key").value.trim();
+  const modelName = el("api-model").value.trim() || "claude-sonnet-5";
+  const body = {
+    model: modelName,
+    max_tokens: 3500,
+    messages: [{ role: "user", content: prompt }],
+    tools: [{ type: "web_search_20250305", name: "web_search" }],
+  };
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try { const j = await res.json(); detail = j.error && j.error.message ? j.error.message : ""; } catch (e) {}
+    throw new Error("API " + res.status + (detail ? ": " + detail : ""));
+  }
+  const data = await res.json();
+  return (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("\n");
+}
+
+function extractJson(text) {
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1 || end < start) throw new Error("Claude did not return JSON. Try again.");
+  return JSON.parse(text.slice(start, end + 1));
+}
+
+function normalizeUrl(raw) {
+  let u = raw.trim();
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  try { return new URL(u).href; } catch (e) { return ""; }
+}
+
+function setStatus(html, isErr) {
+  const s = el("status");
+  s.className = "status" + (isErr ? " err" : "");
+  s.innerHTML = html;
+}
+
+let lastReport = null;
+async function grade() {
+  const url = normalizeUrl(el("url-input").value);
+  const query = el("query-input").value.trim();
+  const key = el("api-key").value.trim();
+  if (!key) { setStatus("Add your Anthropic API key under Connect Claude first.", true); el("api-settings").open = true; return; }
+  if (!url) { setStatus("Enter a valid URL, for example https://yourdocs.com/guide", true); return; }
+  el("btn-grade").disabled = true;
+  setStatus('<span class="spinner"></span>Claude is fetching and grading ' + escapeHtml(url) + '&hellip; this can take 20&ndash;40s.');
+  try {
+    const text = await callClaude(buildPrompt(url, query));
+    const parsed = extractJson(text);
+    const scored = scoreFrom(parsed.results);
+    renderResult(url, scored);
+    lastReport = { url, query, scored };
+    const flags = scored.rows.filter((r) => r.flagged).length;
+    setStatus("Graded " + escapeHtml(url) + "." + (flags ? " " + flags + " signal(s) came back unclear and were scored as fail; review those." : " Review the fixes below, ranked by weight."));
+  } catch (err) {
+    let msg = err.message || String(err);
+    if (/Failed to fetch/i.test(msg)) msg = "Could not reach the API. Check your key and network.";
+    else if (/\b401\b/.test(msg)) msg = "Invalid API key (401). Check it under Connect Claude.";
+    else if (/\b404\b/.test(msg) || /not_found|model/i.test(msg)) msg = msg + "  Try a model your key can access.";
+    else if (/web_search|tool/i.test(msg)) msg = msg + "  Web search may not be enabled on your Anthropic account.";
+    setStatus(msg, true);
+  } finally {
+    el("btn-grade").disabled = false;
+  }
+}
+
+/* ---- report export ---- */
+function reportMarkdown() {
+  if (!lastReport) return "";
+  const { url, query, scored } = lastReport;
+  const band = gradeBand(scored.score);
+  const lines = [
+    "# AI Search Readiness — " + url,
+    "",
+    "**Score: " + scored.score + "/100 — " + band.label + "**",
+    query ? "Target query: " + query : "",
+    "",
+    band.verdict,
+    "",
+    "| Signal | Weight | Status | Fix |",
+    "|---|:--:|:--:|---|",
+  ];
+  scored.rows.forEach((r) => {
+    lines.push("| " + r.name + " | " + r.weight + " | " + r.status + " | " + (r.status === "pass" ? "—" : (r.fix || "").replace(/\|/g, "\\|")) + " |");
+  });
+  lines.push("", "_Graded with the AI Search Readiness Grader._");
+  return lines.filter((l) => l !== "").join("\n");
+}
+
+el("btn-export").addEventListener("click", () => {
+  const md = reportMarkdown();
+  if (!md) return;
+  const blob = new Blob([md], { type: "text/markdown" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ai-readiness-report.md";
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(a.href);
+});
+el("btn-copy").addEventListener("click", async () => {
+  const md = reportMarkdown();
+  if (!md) return;
+  try { await navigator.clipboard.writeText(md); el("btn-copy").textContent = "Copied ✓"; setTimeout(() => el("btn-copy").textContent = "Copy report", 1600); }
+  catch (e) { setStatus("Could not copy to clipboard.", true); }
+});
+
+/* ---- helpers ---- */
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+
+el("btn-grade").addEventListener("click", grade);
+["url-input", "query-input"].forEach((id) => {
+  el(id).addEventListener("keydown", (e) => { if (e.key === "Enter") grade(); });
+});
+el("api-key").addEventListener("input", () => {
+  const st = el("api-state");
+  st.textContent = el("api-key").value.trim() ? "Connected · key held in this browser only" : "API key needed to grade a page";
+});
+</script>
+</body>
+</html>
