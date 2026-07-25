@@ -91,6 +91,9 @@
   .grade-blurb { margin: 0 0 14px; font-size: 13.5px; color: var(--muted); max-width: 74ch; }
   .status { margin-top: 12px; font-size: 13px; min-height: 18px; color: var(--muted); }
   .status.err { color: var(--bad); }
+  .sample-line { margin: 10px 0 0; font-size: 12.5px; color: var(--faint); }
+  .linkbtn { background: none; border: none; padding: 0; font: inherit; color: var(--accent-deep); cursor: pointer; text-decoration: underline; }
+  .sample-banner { margin: 0 0 14px; font-size: 12px; color: var(--warn); background: var(--warn-tint); border: 1px solid #e7d9bf; border-radius: 8px; padding: 8px 12px; }
   .status .spinner {
     display: inline-block; width: 13px; height: 13px; border: 2px solid var(--accent-tint-2);
     border-top-color: var(--accent); border-radius: 50%; vertical-align: -2px; margin-right: 7px;
@@ -226,9 +229,11 @@
       <button class="primary" id="btn-grade">Grade page</button>
     </div>
     <div class="status" id="status"></div>
+    <p class="sample-line">No Anthropic key? <button class="linkbtn" id="btn-sample">See a sample result →</button></p>
   </section>
 
   <section class="panel" id="result-panel" aria-live="polite" hidden>
+    <p class="sample-banner" id="sample-banner" hidden>Sample result — illustrative data, not a live grade. Add your Anthropic key above to grade a real URL.</p>
     <p class="eyebrow">Readiness score</p>
     <div class="result-head">
       <div class="score-ring">
@@ -364,8 +369,9 @@ function scoreFrom(results) {
 }
 
 /* ---- render ---- */
-function renderResult(target, scored) {
+function renderResult(target, scored, isSample) {
   el("result-panel").hidden = false;
+  el("sample-banner").hidden = !isSample;
   const band = gradeBand(scored.score);
 
   // ring
@@ -447,7 +453,7 @@ async function callClaude(prompt) {
     model: modelName,
     max_tokens: 3500,
     messages: [{ role: "user", content: prompt }],
-    tools: [{ type: "web_search_20250305", name: "web_search" }],
+    tools: [{ type: "web_search_20260209", name: "web_search" }],  // current variant with dynamic filtering (Sonnet 5 / Opus 4.6+); older models use web_search_20250305
   };
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -561,6 +567,31 @@ el("btn-copy").addEventListener("click", async () => {
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
 }
+
+/* ---- Sample result (no key needed) ---- */
+function sampleResults() {
+  return [
+    { key: "answer_first", status: "pass", evidence: "Opens with a one-sentence definition before any background.", fix: "Good — the answer is right at the top." },
+    { key: "headings", status: "partial", evidence: "Has an H1 and H2s, but headings are label-style ('Overview') not question-shaped.", fix: "Rewrite H2s as the questions users actually ask, e.g. 'How does pricing work?'." },
+    { key: "chunkable", status: "pass", evidence: "Each section restates its subject and reads standalone.", fix: "Good — sections survive being quoted out of context." },
+    { key: "schema", status: "fail", evidence: "No JSON-LD found in the page source.", fix: "Add Article or FAQPage schema so machines know what the page is." },
+    { key: "scannable", status: "pass", evidence: "Uses bullet lists and a comparison table.", fix: "Good — facts are extractable, not buried in prose." },
+    { key: "examples", status: "partial", evidence: "One worked example; most claims stay abstract.", fix: "Add concrete numbers or a code block to the claims you most want quoted." },
+    { key: "freshness", status: "fail", evidence: "No visible published or updated date.", fix: "Show a 'Last updated' date; models favor content that looks maintained." },
+    { key: "authority", status: "partial", evidence: "Named author, but no outbound citations to sources.", fix: "Cite primary sources for key claims to raise trust signals." },
+    { key: "meta", status: "pass", evidence: "Title and meta description match the page's actual answer.", fix: "Good — title and intent line up." },
+    { key: "llms_txt", status: "fail", evidence: "No /llms.txt file at the domain root.", fix: "Add a short /llms.txt pointing AI crawlers to your key pages." },
+    { key: "crawlable", status: "pass", evidence: "Content is server-rendered HTML; robots.txt allows GPTBot and ClaudeBot.", fix: "Good — AI crawlers can read the page." },
+  ];
+}
+function showSample() {
+  const scored = scoreFrom(sampleResults());
+  renderResult("https://example.com/docs/getting-started  (sample)", scored, true);
+  lastReport = { url: "https://example.com/docs/getting-started (sample)", query: "", scored };
+  setStatus("Showing a sample grade so you can see the output. Add your key above to grade a real URL.");
+  el("result-panel").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+el("btn-sample").addEventListener("click", showSample);
 
 el("btn-grade").addEventListener("click", grade);
 ["url-input", "query-input"].forEach((id) => {
