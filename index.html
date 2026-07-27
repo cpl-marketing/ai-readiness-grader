@@ -411,8 +411,12 @@ function renderResult(target, scored, isSample) {
 }
 
 let animRAF = null;
+let animFallback = null;
 function animateNumber(target) {
   const node = el("score-num");
+  // Guarantee the final value shows even if requestAnimationFrame is throttled.
+  clearTimeout(animFallback);
+  animFallback = setTimeout(() => { node.textContent = String(target); }, 640);
   if (reduceMotion) { node.textContent = String(target); return; }
   const start = 0, t0 = performance.now(), dur = 550;
   cancelAnimationFrame(animRAF);
